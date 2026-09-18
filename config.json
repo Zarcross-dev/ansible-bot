@@ -1,6 +1,5 @@
 {
-  "version": "b0.0.1",
-
+  "version": "b0.0.2",
   "discord": {
     "guild_id": 1081683604066812004,
     "channel_id": 1550492435182780597,
@@ -8,7 +7,6 @@
     "restrict_to_channel": true,
     "allow_server_administrators": true
   },
-
   "ansible": {
     "workdir": "/root/infra",
     "playbook_cmd": "ansible-playbook",
@@ -24,20 +22,18 @@
       "PYTHONUNBUFFERED": "1"
     }
   },
-
   "panel": {
     "title": "Ansible — Panneau de contrôle",
-    "description": "Gestion du parc de VM depuis Discord.\nChaque action est journalisée et le log complet est joint en fin d'exécution.",
+    "description": "Gestion du parc de VM depuis Discord.\nToutes les actions s'appuient sur `maintenance.yml`. Chaque exécution est journalisée et le log complet est joint à la fin.",
     "color": "5865F2",
     "show_action_list": true,
     "footer_note": "Ansible Control"
   },
-
   "actions": [
     {
       "id": "ping",
       "label": "Ping",
-      "emoji": "\ud83d\udce1",
+      "emoji": "📡",
       "style": "secondary",
       "row": 0,
       "description": "Teste la connexion SSH vers tous les hôtes.",
@@ -52,7 +48,7 @@
     {
       "id": "disk",
       "label": "Disques",
-      "emoji": "\ud83d\udcbe",
+      "emoji": "💾",
       "style": "secondary",
       "row": 0,
       "description": "Espace disque restant sur chaque hôte.",
@@ -68,7 +64,7 @@
     {
       "id": "uptime",
       "label": "Uptime",
-      "emoji": "\u23f1\ufe0f",
+      "emoji": "⏱️",
       "style": "secondary",
       "row": 0,
       "description": "Uptime et charge de chaque hôte.",
@@ -84,7 +80,7 @@
     {
       "id": "pending",
       "label": "Reboot requis ?",
-      "emoji": "\u2753",
+      "emoji": "❓",
       "style": "secondary",
       "row": 0,
       "description": "Liste les hôtes en attente de redémarrage.",
@@ -97,81 +93,92 @@
       "timeout": 120,
       "button": true
     },
-
     {
       "id": "dryrun",
       "label": "Simulation",
-      "emoji": "\ud83e\uddea",
+      "emoji": "🧪",
       "style": "secondary",
       "row": 1,
-      "description": "Mise à jour en mode --check, ne modifie rien.",
+      "description": "Mise à jour en mode `--check` : montre ce qui serait installé, ne modifie rien.",
       "type": "playbook",
-      "playbook": "update.yml",
-      "check": true,
+      "playbook": "maintenance.yml",
       "confirm": false,
       "timeout": 1800,
-      "button": true
+      "button": true,
+      "tags": [
+        "update"
+      ],
+      "check": true
     },
     {
       "id": "update",
       "label": "Mettre à jour",
-      "emoji": "\ud83d\udce6",
+      "emoji": "📦",
       "style": "primary",
       "row": 1,
-      "description": "Met à jour les 5 VM, sans redémarrer.",
+      "description": "Met à jour les 5 VM. Aucun redémarrage, signale ceux qui en auront besoin.",
       "type": "playbook",
-      "playbook": "update.yml",
+      "playbook": "maintenance.yml",
       "confirm": false,
       "timeout": 3600,
-      "button": true
+      "button": true,
+      "tags": [
+        "update"
+      ]
     },
     {
       "id": "maintenance",
       "label": "Update + reboot main",
-      "emoji": "\ud83d\udd04",
+      "emoji": "🔄",
       "style": "primary",
       "row": 1,
-      "description": "Met à jour tout, puis redémarre les `main` qui en ont besoin. Le webserver n'est pas redémarré.",
+      "description": "Met à jour tout, puis redémarre un par un les `main` qui le nécessitent. Le webserver n'est pas redémarré.",
       "type": "playbook",
       "playbook": "maintenance.yml",
       "confirm": true,
       "timeout": 5400,
       "button": true
     },
-
     {
       "id": "reboot_main",
       "label": "Reboot main",
-      "emoji": "\ud83d\udd01",
+      "emoji": "🔁",
       "style": "danger",
       "row": 2,
-      "description": "Redémarre les serveurs `main` un par un, sans mise à jour.",
+      "description": "Redémarre les 4 serveurs `main` un par un, sans mise à jour, qu'ils le nécessitent ou non.",
       "type": "playbook",
-      "playbook": "reboot.yml",
-      "extra_vars": { "seulement_si_requis": false },
+      "playbook": "maintenance.yml",
       "confirm": true,
       "timeout": 3600,
-      "button": true
+      "button": true,
+      "tags": [
+        "reboot"
+      ],
+      "extra_vars": {
+        "seulement_si_requis": false
+      }
     },
     {
       "id": "maintenance_full",
       "label": "Update + reboot TOUT",
-      "emoji": "\u26a0\ufe0f",
+      "emoji": "⚠️",
       "style": "danger",
       "row": 2,
-      "description": "Comme ci-dessus mais redémarre aussi le **webserver** (coupure du reverse proxy).",
+      "description": "Met à jour tout, puis redémarre les `main` **et** le webserver, ce dernier en dernier.",
       "type": "playbook",
       "playbook": "maintenance.yml",
-      "extra_vars": { "reboot_critical": true },
       "confirm": true,
-      "confirm_text": "Le webserver (nginx) sera redémarré : tous tes services web seront coupés pendant environ une minute.",
+      "confirm_text": "Le webserver (nginx) sera redémarré en fin de playbook : tous tes services web seront coupés environ une minute.",
       "timeout": 5400,
-      "button": true
+      "button": true,
+      "extra_vars": {
+        "reboot_critical": true
+      }
     },
     {
       "id": "reboot_critical",
       "label": "Reboot webserver",
-      "emoji": "\ud83d\udea8",
+      "emoji": "🚨",
       "style": "danger",
       "row": 2,
       "description": "Redémarre uniquement le serveur critique.",
@@ -184,11 +191,10 @@
       "timeout": 900,
       "button": true
     },
-
     {
       "id": "nginx_test",
       "label": "Test nginx",
-      "emoji": "\ud83e\uddf0",
+      "emoji": "🧰",
       "style": "success",
       "row": 3,
       "description": "Valide la configuration nginx du serveur critique.",
@@ -204,7 +210,7 @@
     {
       "id": "nginx_reload",
       "label": "Reload nginx",
-      "emoji": "\u267b\ufe0f",
+      "emoji": "♻️",
       "style": "success",
       "row": 3,
       "description": "Recharge nginx sans coupure (test de conf automatique avant).",
@@ -220,7 +226,7 @@
     {
       "id": "docker_ps",
       "label": "Conteneurs",
-      "emoji": "\ud83d\udc33",
+      "emoji": "🐳",
       "style": "success",
       "row": 3,
       "description": "Conteneurs Docker non sains ou arrêtés.",
@@ -236,7 +242,7 @@
     {
       "id": "services",
       "label": "Services KO",
-      "emoji": "\ud83e\ude7a",
+      "emoji": "🩺",
       "style": "success",
       "row": 3,
       "description": "Unités systemd en échec sur chaque hôte.",
@@ -248,6 +254,19 @@
       "confirm": false,
       "timeout": 180,
       "button": true
+    },
+    {
+      "id": "nopasswd",
+      "label": "Appliquer sudo NOPASSWD",
+      "emoji": "🔑",
+      "style": "secondary",
+      "description": "Réapplique la règle sudoers. Utile après l'ajout d'une nouvelle VM.",
+      "type": "playbook",
+      "playbook": "nopasswd.yml",
+      "confirm": true,
+      "confirm_text": "Modifie /etc/sudoers.d sur les hôtes ciblés.",
+      "timeout": 600,
+      "button": false
     }
   ]
 }
