@@ -1,0 +1,18 @@
+[Unit]
+Description=Ansible Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/infra/bot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/root/infra/bot/.env
+ExecStart=python3 -u bot.py
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
