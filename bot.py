@@ -33,6 +33,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 MAX_BLOCK = 3400          # taille max du bloc de log dans un embed
 LIVE_LINES = 18           # nombre de lignes affichées en direct
 EDIT_INTERVAL = 2.0       # secondes minimum entre deux éditions du message
+INTERACTION_TTL = 14 * 60 # durée de vie utile du token d'interaction (15 min côté Discord)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -352,7 +353,7 @@ class Job:
 
         if self.returncode is not None:
             emb.add_field(name="Récapitulatif", value=self._recap(), inline=False)
-        emb.set_footer(text=f"{self.cfg.panel.get('footer_note', 'Ansible')} • {self.cfg.version}")
+        emb.set_footer(text=f"{self.cfg.panel.get('footer_note', 'AnsibleBot')} • {self.cfg.version}")
         return emb
 
     def _recap(self) -> str:
@@ -510,12 +511,83 @@ def panel_embed(cfg: Config) -> discord.Embed:
     emb.add_field(
         name="\u200b",
         value="Les actions marquées ⚠️ demandent une confirmation. "
-              "`/run`, `/status`, `/cancel` et `/logs` sont aussi disponibles.",
+              "`/run`, `/status`, `/cancel` et `/logs` sont aussi disponibles.\n"
+              "Le suivi d'exécution et les logs ne sont visibles que par toi.",
         inline=False,
     )
-    emb.set_footer(text=f"{p.get('footer_note', 'Ansible')} • {cfg.version}")
+    emb.set_footer(text=f"{p.get('footer_note', 'AnsibleBot')} • {cfg.version}")
     emb.timestamp = datetime.now(timezone.utc)
     return emb
+
+
+# --------------------------------------------------------------------------- #
+#  Restitution éphémère d'un job
+# --------------------------------------------------------------------------- #
+class JobReporter:
+    """Affiche l'avancement d'un job dans la réponse éphémère de l'interaction.
+
+    Rien n'est jamais publié en clair dans le salon : le suivi vit dans la
+    réponse éphémère, et si le token d'interaction expire (Discord le limite à
+    15 minutes) le résultat final part en message privé.
+    """
+
+    def __init__(self, interaction: discord.Interaction):
+        self.interaction = interaction
+        self.expired = False
+
+    @property
+    def alive(self) -> bool:
+        age = (datetime.now(timezone.utc) - self.interaction.created_at).total_seconds()
+        return not self.expired and age < INTERACTION_TTL
+
+    @staticmethod
+    def _files(log_path: Path | None) -> list[discord.File]:
+        if log_path and log_path.exists() and log_path.stat().st_size > 0:
+            return [discord.File(log_path, filename=log_path.name)]
+        return []
+
+    async def update(self, embed: discord.Embed) -> bool:
+        """Rafraîchit la vue en direct. Silencieux si le token n'est plus valide."""
+        if not self.alive:
+            return False
+        try:
+            await self.interaction.edit_original_response(
+                content=None, embed=embed, view=None)
+            return True
+        except discord.HTTPException as exc:
+            log.debug("Suivi éphémère interrompu : %s", exc)
+            self.expired = True
+            return False
+
+    async def finish(self, embed: discord.Embed, log_path: Path | None) -> None:
+        """Rendu final, log complet joint, toujours en privé."""
+        if self.alive:
+            try:
+                await self.interaction.edit_original_response(
+                    content=None, embed=embed, view=None, attachments=self._files(log_path))
+                return
+            except discord.HTTPException as exc:
+                log.debug("Pièce jointe éphémère refusée : %s", exc)
+            try:
+                await self.interaction.edit_original_response(
+                    content=None, embed=embed, view=None)
+                files = self._files(log_path)
+                if files:
+                    await self.interaction.followup.send(files=files, ephemeral=True)
+                return
+            except discord.HTTPException as exc:
+                log.debug("Réponse éphémère inaccessible : %s", exc)
+                self.expired = True
+        await self._dm(embed, log_path)
+
+    async def _dm(self, embed: discord.Embed, log_path: Path | None) -> None:
+        try:
+            await self.interaction.user.send(
+                content="Le suivi éphémère a expiré, voici le résultat :",
+                embed=embed, files=self._files(log_path))
+        except discord.HTTPException as exc:
+            log.warning("Résultat non remis à %s (DM fermés ?) : %s",
+                        self.interaction.user, exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -539,7 +611,7 @@ class AnsibleBot(discord.Client):
 
     async def on_ready(self) -> None:
         log.info("Connecté en tant que %s (%s)", self.user, self.user.id)
-        await self.change_presence(activity=discord.Game(name=f"Ansible {self.cfg.version}"))
+        #await self.change_presence(activity=discord.Game(name=f"Ansible {self.cfg.version}"))
 
     # ------------------------------------------------------- lancer un job -- #
     async def trigger(self, interaction: discord.Interaction, action_id: str,
@@ -583,35 +655,22 @@ class AnsibleBot(discord.Client):
                     content="Annulé." if view.value is False else "Confirmation expirée.",
                     embed=None, view=None)
                 return
-            await interaction.edit_original_response(content="C'est parti.", embed=None, view=None)
-            channel = interaction.channel
-            message = await channel.send(embed=discord.Embed(
-                title="Démarrage…", colour=discord.Colour.blurple()))
         else:
-            await interaction.response.send_message(embed=discord.Embed(
-                title="Démarrage…", colour=discord.Colour.blurple()))
-            message = await interaction.original_response()
+            await interaction.response.defer(ephemeral=True, thinking=True)
+
+        starting = discord.Embed(title="Démarrage…", colour=discord.Colour.blurple())
+        await interaction.edit_original_response(content=None, embed=starting, view=None)
 
         job = Job(self.cfg, action, argv, interaction.user)
+        reporter = JobReporter(interaction)
         log.info("[%s] %s → %s", interaction.user, action_id, job.pretty_cmd)
 
         async def on_update(j: Job) -> None:
-            try:
-                await message.edit(embed=j.embed(), view=None)
-            except discord.HTTPException:
-                pass
+            await reporter.update(j.embed())
 
-        await message.edit(embed=job.embed())
+        await reporter.update(job.embed())
         await self.jobs.run(job, on_update)
-
-        # Rendu final + log complet en pièce jointe
-        files: list[discord.File] = []
-        if job.log_path and job.log_path.exists() and job.log_path.stat().st_size > 0:
-            files.append(discord.File(job.log_path, filename=job.log_path.name))
-        try:
-            await message.edit(embed=job.embed(), attachments=files)
-        except discord.HTTPException:
-            await message.edit(embed=job.embed())
+        await reporter.finish(job.embed(), job.log_path)
         log.info("[%s] terminé, code %s en %.1fs", action_id, job.returncode, job.elapsed)
 
 
@@ -854,7 +913,7 @@ def main() -> None:
                     os.environ.setdefault(k.strip(), v.strip().strip("'\""))
             token = os.environ.get("DISCORD_TOKEN")
     if not token:
-        sys.exit("DISCORD_TOKEN absent : définis-le dans l'environnement ou dans .env")
+        sys.exit("Missing Discord token.")
 
     try:
         cfg = Config(CONFIG_PATH)
