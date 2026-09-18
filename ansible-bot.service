@@ -1,0 +1,19 @@
+[Unit]
+Description=Ansible Control - bot Discord
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ansible-bot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/ansible-bot/.env
+ExecStart=/opt/ansible-bot/venv/bin/python /opt/ansible-bot/bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
