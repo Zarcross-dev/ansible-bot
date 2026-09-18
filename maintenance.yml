@@ -1,0 +1,83 @@
+# Mise à jour de tous les serveurs, puis redémarrage.
+#
+#   ansible-playbook maintenance.yml
+#       -> update les 5, redémarre les main qui en ont besoin
+#   ansible-playbook maintenance.yml --tags update
+#       -> met à jour seulement, aucun redémarrage
+#   ansible-playbook maintenance.yml --tags reboot
+#       -> redémarre seulement, aucune mise à jour
+#   ansible-playbook maintenance.yml -e reboot_critical=true
+#       -> redémarre aussi le webserver, en dernier
+#   ansible-playbook maintenance.yml -e seulement_si_requis=false
+#       -> redémarre même sans nécessité
+#   ansible-playbook maintenance.yml -e lot=2
+#       -> 2 serveurs main à la fois au lieu d'un
+
+- name: Mise à jour des serveurs main
+  hosts: main
+  become: true
+  gather_facts: false
+  tags: [update, maj]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/maj-debian.yml
+
+- name: Mise à jour du serveur critical
+  hosts: critical
+  become: true
+  gather_facts: false
+  serial: 1
+  tags: [update, maj]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/maj-debian.yml
+
+    - name: Vérifier la configuration nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: S'assurer que nginx tourne
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+- name: Redémarrage des serveurs main
+  hosts: main
+  become: true
+  gather_facts: false
+  serial: "{{ lot | default(1) }}"
+  max_fail_percentage: 0
+  tags: [reboot]
+  vars:
+    seulement_si_requis: true
+  tasks:
+    - ansible.builtin.import_tasks: tasks/reboot-debian.yml
+
+- name: Redémarrage du serveur critical
+  hosts: critical
+  become: true
+  gather_facts: false
+  serial: 1
+  tags: [reboot]
+  vars:
+    seulement_si_requis: true
+    reboot_critical: false
+  tasks:
+    - name: Périmètre du redémarrage
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Redémarrage du serveur critical demandé'
+             if reboot_critical | bool
+             else 'Serveur critical ignoré (ajoute -e reboot_critical=true pour l\'inclure)' }}
+
+    - name: Redémarrage
+      ansible.builtin.import_tasks: tasks/reboot-debian.yml
+      when: reboot_critical | bool
+
+    - name: Vérifier que nginx répond après redémarrage
+      ansible.builtin.service_facts:
+      when: reboot_critical | bool
+
+    - name: État de nginx
+      ansible.builtin.debug:
+        msg: "nginx : {{ ansible_facts.services['nginx.service'].state | default('inconnu') }}"
+      when: reboot_critical | bool
